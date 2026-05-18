@@ -223,6 +223,7 @@ def scan_csv(
     delimiter: str = ",",
     encoding: str = "utf-8",
     trim_headers: bool = True,
+    sample_size: int | None = None,
 ) -> dict[str, str]:
     """Return schema (column names + inferred types) without loading data.
 
@@ -237,6 +238,8 @@ def scan_csv(
         transcoded to infer the schema.
     trim_headers : bool, default True
         Strip leading/trailing whitespace from column names.
+    sample_size : int, optional
+        Number of rows to read for type inference. If None, defaults to 100 rows.
 
     Returns
     -------
@@ -290,6 +293,14 @@ def scan_csv(
     config.delimiter = delimiter
     config.encoding = encoding
     config.trim_headers = trim_headers
+
+    if sample_size is not None:
+        if not isinstance(sample_size, int) or isinstance(sample_size, bool):
+            raise TypeError("sample_size must be an integer.")
+        if sample_size <= 0:
+            raise ValueError("sample_size must be a positive integer greater than 0.")
+        config.sample_size = sample_size
+
     reader = _CsvReader(config)
     try:
         # Schema inference only needs a sample, avoiding full-file transcode.
@@ -300,7 +311,7 @@ def scan_csv(
             path,
             encoding,
             delimiter=delimiter,
-            sample_rows=10000,
+            sample_rows=100 if sample_size is None else sample_size,
         ) as native_path:
             return reader.scan_schema(native_path)
     except RuntimeError as e:
