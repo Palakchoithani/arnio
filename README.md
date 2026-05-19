@@ -962,6 +962,8 @@ Expected cleaned output with `mode="strict"`:
 
 See [examples/auto_clean_tutorial.py](examples/auto_clean_tutorial.py) for a runnable version of this walkthrough.
 
+> For strict mode data-loss risks and safe workflow, see [AUTO_CLEAN_GUIDE.md](AUTO_CLEAN_GUIDE.md).
+
 <br>
 
 ## Data Quality Reports
@@ -982,6 +984,22 @@ df = ar.from_pandas(pd.DataFrame(data))
 # Bounded profiling for large datasets (controls how many sample values are kept)
 report = ar.profile(df, sample_size=5)
 safe_report = report.to_dict(redact_sample_values=True)
+```
+
+When `approx_top_values=True`, string columns with high cardinality use a
+deterministic sample to estimate top values. Each column includes
+`top_values_is_approximate`, `top_values_sample_count`, and
+`top_values_sample_ratio`, and the counts/ratios are sample-based.
+
+```python
+# Optional: approximate top values for high-cardinality string columns
+report = ar.profile(
+    df,
+    approx_top_values=True,
+    approx_top_values_min_unique=1000,
+    approx_top_values_min_ratio=0.2,
+    approx_top_values_sample_size=2000,
+)
 ```
 
 ### Notebook dashboard (Jupyter / Colab)

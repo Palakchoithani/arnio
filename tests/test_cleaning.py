@@ -180,6 +180,12 @@ class TestDropDuplicates:
         # Only Charlie is unique
         assert result.shape[0] == 1
 
+    @pytest.mark.parametrize("keep", ["invalid", True, None])
+    def test_drop_dupes_rejects_invalid_keep_values(self, csv_with_duplicates, keep):
+        frame = ar.read_csv(csv_with_duplicates)
+        with pytest.raises(ValueError, match="keep must be one of"):
+            ar.drop_duplicates(frame, keep=keep)
+
     def test_drop_dupes_subset(self, csv_with_duplicates):
         frame = ar.read_csv(csv_with_duplicates)
         result = ar.drop_duplicates(frame, subset=["name"])
@@ -814,6 +820,23 @@ class TestParseBoolStrings:
         with pytest.raises(ValueError):
             ar.parse_bool_strings(frame, subset=[])
 
+    def test_parse_bool_strings_accepts_tuple_subset(self):
+        import pandas as pd
+
+        df = pd.DataFrame(
+            {
+                "active": ["YES", "no"],
+                "name": ["Alice", "Bob"],
+            }
+        )
+
+        frame = ar.from_pandas(df)
+        result = ar.parse_bool_strings(frame, subset=("active",))
+        out = ar.to_pandas(result)
+
+        assert out["active"].tolist() == [True, False]
+        assert out["name"].tolist() == ["Alice", "Bob"]
+
     def test_parse_bool_strings_missing_subset_column(self):
         import pandas as pd
 
@@ -932,6 +955,12 @@ class TestCastTypes:
 
         with pytest.raises(ValueError, match="errors must be either"):
             ar.cast_types(frame, {"age": "int64"}, errors="ignore")
+
+    def test_cast_rejects_non_mapping_with_clear_error(self, sample_csv):
+        frame = ar.read_csv(sample_csv)
+
+        with pytest.raises(TypeError, match="mapping must be a mapping"):
+            ar.cast_types(frame, [("age", "int64")])
 
     def test_cast_bool_rejects_unknown_strings(self):
         frame = ar.from_pandas(pd.DataFrame({"active": ["true", "maybe"]}))

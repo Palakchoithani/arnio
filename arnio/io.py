@@ -54,9 +54,9 @@ def _utf8_csv_path(
                     reader = csv.reader(src, delimiter=delimiter)
                     writer = csv.writer(tmp, delimiter=delimiter)
                     for row_count, row in enumerate(reader):
-                        writer.writerow(row)
                         if row_count >= sample_rows:
                             break
+                        writer.writerow(row)
                 else:
                     shutil.copyfileobj(src, tmp)
                 tmp_name = tmp.name
@@ -297,8 +297,14 @@ def write_csv(
             f"Unsupported file format: {path}. Only .csv, .txt, and .tsv are supported."
         )
 
+    if not isinstance(delimiter, str):
+        raise TypeError("delimiter must be a string")
     if len(delimiter) != 1:
         raise ValueError(f"delimiter must be a single character, got {delimiter!r}")
+    if not isinstance(line_terminator, str):
+        raise TypeError("line_terminator must be a string")
+    if line_terminator == "":
+        raise ValueError("line_terminator must not be empty")
 
     config = _CsvWriteConfig()
     config.delimiter = delimiter

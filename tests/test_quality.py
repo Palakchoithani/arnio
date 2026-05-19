@@ -403,6 +403,74 @@ def test_profile_sample_size_small_dataset_and_nulls(tmp_path):
     assert report.columns["id"].sample_values == [1.0, 3.0]
 
 
+def test_profile_approx_top_values_deterministic_high_cardinality():
+    values = [f"user_{i}" for i in range(2000)]
+    frame = ar.from_pandas(pd.DataFrame({"user": values}))
+
+    report = ar.profile(
+        frame,
+        approx_top_values=True,
+        approx_top_values_min_unique=1000,
+        approx_top_values_min_ratio=0.5,
+        approx_top_values_sample_size=200,
+    )
+    report_again = ar.profile(
+        frame,
+        approx_top_values=True,
+        approx_top_values_min_unique=1000,
+        approx_top_values_min_ratio=0.5,
+        approx_top_values_sample_size=200,
+    )
+
+    column = report.columns["user"]
+    assert column.top_values_is_approximate is True
+    assert column.top_values == report_again.columns["user"].top_values
+    assert len(column.top_values) <= 5
+    assert column.top_values_sample_count == 200
+    assert column.top_values_sample_ratio == pytest.approx(0.1, rel=1e-3)
+
+    payload = report.to_dict()
+    col_dict = payload["columns"]["user"]
+    assert col_dict["top_values_is_approximate"] is True
+    assert col_dict["top_values_sample_count"] == 200
+
+
+def test_profile_approx_top_values_skips_low_cardinality():
+    frame = ar.from_pandas(pd.DataFrame({"city": ["a", "b", "a", "c"]}))
+
+    report = ar.profile(
+        frame,
+        approx_top_values=True,
+        approx_top_values_min_unique=10,
+        approx_top_values_min_ratio=0.9,
+    )
+
+    column = report.columns["city"]
+    assert column.top_values_is_approximate is False
+    assert column.top_values[0][0] == "a"
+    assert column.top_values[0][1] == 2
+
+
+def test_profile_approx_top_values_avoids_exact_counts(monkeypatch):
+    values = [f"user_{i}" for i in range(1500)]
+    frame = ar.from_pandas(pd.DataFrame({"user": values}))
+
+    def raise_exact(*_args, **_kwargs):
+        raise AssertionError("exact top_values should not be called")
+
+    monkeypatch.setattr("arnio.quality._top_values", raise_exact)
+
+    report = ar.profile(
+        frame,
+        approx_top_values=True,
+        approx_top_values_min_unique=1000,
+        approx_top_values_min_ratio=0.5,
+        approx_top_values_sample_size=200,
+    )
+
+    assert report.columns["user"].top_values_is_approximate is True
+
+
 def test_quality_to_dict_default_preserves_sample_values(tmp_path):
     path = tmp_path / "dict_default.csv"
     path.write_text("name\nAlice\nBob\n")
@@ -474,6 +542,43 @@ def test_profile_sample_size_validation(tmp_path):
         assert False, "Expected TypeError"
     except TypeError as exc:
         assert "sample_size must be an integer" in str(exc)
+
+
+def test_profile_approx_top_values_validation(tmp_path):
+    path = tmp_path / "sample.csv"
+    path.write_text("id\n1\n")
+    frame = ar.read_csv(path)
+
+    with pytest.raises(TypeError, match="approx_top_values must be a bool"):
+        ar.profile(frame, approx_top_values="yes")
+
+    with pytest.raises(
+        TypeError, match="approx_top_values_min_unique must be an integer"
+    ):
+        ar.profile(frame, approx_top_values_min_unique="5")
+
+    with pytest.raises(
+        ValueError, match="approx_top_values_min_unique must be non-negative"
+    ):
+        ar.profile(frame, approx_top_values_min_unique=-1)
+
+    with pytest.raises(TypeError, match="approx_top_values_min_ratio must be a float"):
+        ar.profile(frame, approx_top_values_min_ratio="0.5")
+
+    with pytest.raises(
+        ValueError, match="approx_top_values_min_ratio must be between 0 and 1"
+    ):
+        ar.profile(frame, approx_top_values_min_ratio=1.5)
+
+    with pytest.raises(
+        TypeError, match="approx_top_values_sample_size must be an integer"
+    ):
+        ar.profile(frame, approx_top_values_sample_size="10")
+
+    with pytest.raises(
+        ValueError, match="approx_top_values_sample_size must be positive"
+    ):
+        ar.profile(frame, approx_top_values_sample_size=0)
 
 
 # ── top_values tests ──────────────────────────────────────────────────────────
@@ -1105,3 +1210,36 @@ def test_auto_clean_explain_dry_run_error(tmp_path):
         ValueError, match="explain=True cannot be used with dry_run=True"
     ):
         ar.auto_clean(frame, explain=True, dry_run=True)
+
+
+def test_compare_profiles_under_threshold_is_ok():
+    """Changes below warning thresholds should result in 'ok' status."""
+    baseline = ar.profile(ar.from_pandas(pd.DataFrame({"score": [10.0, 11.0, 12.0]})))
+    # Shift values by 0.1 to keep std constant but shift mean slightly
+    current = ar.profile(ar.from_pandas(pd.DataFrame({"score": [10.1, 11.1, 12.1]})))
+
+    comparison = ar.compare_profiles(baseline, current)
+    assert comparison.drift_report["score"]["status"] == "ok"
+    assert comparison.status_counts == {"ok": 1, "warning": 0, "changed": 0}
+
+
+def test_compare_profiles_above_warning_threshold_is_warning():
+    """Changes above warning but below changed threshold should result in 'warning' status."""
+    baseline = ar.profile(ar.from_pandas(pd.DataFrame({"score": [10.0, 11.0, 12.0]})))
+    # Shift values by 1.8 to trigger warning status (approx 15% shift)
+    current = ar.profile(ar.from_pandas(pd.DataFrame({"score": [11.8, 12.8, 13.8]})))
+
+    comparison = ar.compare_profiles(baseline, current)
+    assert comparison.drift_report["score"]["status"] == "warning"
+    assert comparison.status_counts == {"ok": 0, "warning": 1, "changed": 0}
+
+
+def test_compare_profiles_above_changed_threshold_is_changed():
+    """Changes above changed threshold should result in 'changed' status."""
+    baseline = ar.profile(ar.from_pandas(pd.DataFrame({"score": [10.0, 11.0, 12.0]})))
+    # Shift values by 5.0 to trigger changed status (approx 45% shift)
+    current = ar.profile(ar.from_pandas(pd.DataFrame({"score": [15.0, 16.0, 17.0]})))
+
+    comparison = ar.compare_profiles(baseline, current)
+    assert comparison.drift_report["score"]["status"] == "changed"
+    assert comparison.status_counts == {"ok": 0, "warning": 0, "changed": 1}
